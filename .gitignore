@@ -1,0 +1,7 @@
+# Real config with the bot token - never commit
+render_notifier.ini
+*.log
+*.log.1
+
+# Test output
+tests/_out/
