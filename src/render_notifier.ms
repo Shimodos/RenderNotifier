@@ -439,6 +439,11 @@ Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
                 local inMtlEdit = (isKindOf p Array) and p.count >= 13 and p[13] == true
 
                 if inMtlEdit then ()
+                -- узел Corona DR: DrServer открывает в своём Max служебную сцену corona_dr.max,
+                -- а подхватив чужой рендер - присланную received_scene_<номер>.max.
+                -- О таком рендере сообщает главная машина, узел молчит.
+                else if (matchPattern maxFileName pattern:"corona_dr.max") or (matchPattern maxFileName pattern:"received_scene_*.max") then
+                    logMsg ("skip: Corona DR node (" + maxFileName + ")")
                 else if not (loadConfig()) then logMsg ("skip: config not found: " + iniPath)
                 else if not enabled then ()
                 else if token == "" or chatId == "" then logMsg "skip: token or chat_id is empty"

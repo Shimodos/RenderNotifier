@@ -38,8 +38,17 @@
         render outputwidth:64 outputheight:48 vfb:off
         format "render4 ok\n" to:f
 
-        -- 3ds Max dies in the middle of a render: the watchdog must report it
+        -- Corona DR node renders its service scene corona_dr.max: nothing must be sent
         copyFile (dir + "\\crash.ini") (dir + "\\render_notifier.ini")
+        saveMaxFile (dir + "\\corona_dr.max") quiet:true
+        render outputwidth:64 outputheight:48 vfb:off
+        -- ...and the scene it receives from the master is received_scene_<number>.max
+        saveMaxFile (dir + "\\received_scene_327441749.max") quiet:true
+        render outputwidth:64 outputheight:48 vfb:off
+        format "render dr ok\n" to:f
+        saveMaxFile (dir + "\\work.max") quiet:true
+
+        -- 3ds Max dies in the middle of a render: the watchdog must report it
         format "render5 start\n" to:f
         close f
         callbacks.addScript #preRenderFrame "((dotNetClass \"System.Diagnostics.Process\").GetCurrentProcess()).Kill()" id:#rnTestKill

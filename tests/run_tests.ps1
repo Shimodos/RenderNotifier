@@ -102,7 +102,7 @@ foreach ($year in $Years) {
         Check 'second setup is 2 of 2' ($texts[2].StartsWith("🟡 Рендер запущен — кадр 2 из 2`n"))
         Check 'frame count on sequence' ($texts[3] -match 'Кадров анимации: 3')
         Check 'queue finished message' ($texts[4] -match '^🏁 Очередь завершена — 2 кадра за \d+ сек')
-        Check 'watchdog reports killed 3ds Max' ($texts[5] -match "^🔴 3ds Max закрылся во время рендера — кадр 2 из 2`n" -and $texts[5] -match "`nКадр: SetupC`n" -and $texts[5] -match "`nРендер шёл \d+:\d\d:\d\d \(ч:мм:сс\)$")
+        Check 'watchdog reports killed 3ds Max' ($texts[5] -match "^🔴 3ds Max закрылся во время рендера — кадр 2 из 2`n" -and $texts[5] -match "`nСцена: work\.max`nКадр: SetupC`n" -and $texts[5] -match "`nРендер шёл \d+:\d\d:\d\d \(ч:мм:сс\)$")
     }
 
     $log = if (Test-Path $logFile) { @(Get-Content $logFile -Encoding UTF8 | Select-Object -Skip $logBefore) } else { @() }
@@ -111,6 +111,7 @@ foreach ($year in $Years) {
     Check 'log: failure recorded' (@($log -match 'send failed|timed out|no response').Count -ge 1)
     Check 'log: missing config recorded' (@($log -match 'config not found').Count -ge 1)
     Check 'log: token is masked' (@($log -match 'TESTTOKEN123').Count -eq 0)
+    Check 'Corona DR node render is skipped' ($result -match 'render dr ok' -and @($log -match 'skip: Corona DR node \((corona_dr|received_scene_327441749)\.max\)').Count -eq 2)
     Check 'log: watchdog recorded the crash' (@($log -match 'watchdog: 3ds Max \d+ exited during render, message sent').Count -eq 1)
     Start-Sleep -Seconds 3   # the watchdog removes its marker right after sending
     # a marker of a live 3ds Max is a real render in progress on this machine, not ours
