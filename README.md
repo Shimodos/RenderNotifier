@@ -1,143 +1,124 @@
 # Render Notifier
 
-Скрипт для 3ds Max, который сам пишет в Telegram-чат студии, когда рендер начался и когда закончился: кто, на каком компьютере, какая сцена и сколько рендерилось.
+A small script for 3ds Max that posts to a Telegram chat when a render starts, finishes or dies:
+which scene, which shot, which machine and how long it took. One MAXScript file, no server,
+nothing to launch by hand.
+
+[Русская версия](README.ru.md)
+
+<p align="center">
+  <img src="assets/viarde_render_logo.png" width="160" alt="Render Notifier">
+</p>
 
 ```
 🟡 Рендер запущен — кадр 2 из 5
-Сцена: KHU100-30_main.max
-Кадр: KHU100-30_Angle02
-Компьютер: RENDER-03 (Oleksiy)
+Сцена: Kitchen_main.max
+Кадр: Kitchen_Angle02
+Компьютер: 🟦 Ферма 1
 4000×3000, Corona
 
 🟢 Рендер закончен — 1 ч 42 мин — кадр 2 из 5
-Сцена: KHU100-30_main.max
-Кадр: KHU100-30_Angle02
-Компьютер: RENDER-03 (Oleksiy)
+Сцена: Kitchen_main.max
+Кадр: Kitchen_Angle02
+Компьютер: 🟦 Ферма 1
 
 🏁 Очередь завершена — 5 кадров за 6 ч 10 мин
-Сцена: KHU100-30_main.max
-Компьютер: RENDER-03 (Oleksiy)
-```
 
-Если 3ds Max упал или его закрыли посреди рендера:
-
-```
 🔴 3ds Max закрылся во время рендера — кадр 2 из 5
-Сцена: KHU100-30_main.max
-Кадр: KHU100-30_Angle02
-Компьютер: RENDER-03 (Oleksiy)
 Рендер шёл 1:12:40 (ч:мм:сс)
 ```
 
-Это делает сторож — скрытый процесс PowerShell, который скрипт запускает при первом рендере и который живёт, пока открыт Max. Он ничего не делает, пока Max работает, и завершается вместе с ним. Отключается ключом `crash_watch=false`.
+Messages are in Russian; the texts live in one place in `src/render_notifier.ms`.
 
-Машина, которая работает узлом Corona DR и помогает чужому рендеру, сообщений не шлёт: о рендере сообщает главная машина. Узел определяется по имени сцены, которую открывает DrServer: `corona_dr.max` в простое и `received_scene_<номер>.max` во время чужого рендера.
+## Features
 
-«Кадр» — это setup из Pulze Scene Manager 2.x: его имя, номер среди отмеченных на рендер и их общее число берутся из данных Scene Manager в сцене. Если сцена без Scene Manager, этих строк просто нет.
+- **Start and finish messages** with scene name, machine, resolution, renderer and duration.
+- **Works with any way of rendering.** The script listens to 3ds Max's own `#preRender` / `#postRender`
+  events, so it does not matter whether the render was started by the Render button, a script or
+  Pulze Scene Manager.
+- **Pulze Scene Manager 2.x queues.** Reads the setups stored in the scene and adds the shot name,
+  "shot N of M" among the setups marked for render, and a separate message when the last one is done.
+- **Crash watchdog.** A hidden PowerShell process sits next to 3ds Max and reports when Max exits
+  in the middle of a render.
+- **Machine labels.** One config for the whole studio maps Windows computer names to readable labels;
+  a coloured emoji in the label tells machines apart in the chat.
+- **Corona DR nodes stay silent.** A node that picks up someone else's render does not post; the
+  master machine does.
+- **Never gets in the way of the render.** The start message is sent in the background, every
+  error only goes to a log, and without internet 3ds Max renders as usual.
+- **No dependencies.** HTTP goes through .NET that ships with 3ds Max. Tested on 3ds Max 2024
+  (.NET Framework) and 2026 (.NET 8).
 
-Руками ничего запускать не нужно: скрипт загружается вместе с Max и ловит события рендера, поэтому работает и с Pulze Scene Manager, и с обычной кнопкой Render.
+## Setup
 
-## Один раз на студию: бот и чат
+### 1. Bot and chat (once)
 
-1. В Telegram написать [@BotFather](https://t.me/BotFather), команда `/newbot`, получить токен.
-2. Создать групповой чат студии и добавить туда бота.
-3. Написать в чат любое сообщение, открыть в браузере `https://api.telegram.org/bot<TOKEN>/getUpdates` и найти `chat.id` (у групп он отрицательный, у супергрупп начинается с `-100`).
-4. Скопировать `config\render_notifier.example.ini` в `config\render_notifier.ini`, вписать `token` и `chat_id`. Если в группе включены темы и нужна отдельная тема — ещё `thread_id`.
-5. Проверить бота без Max:
+1. Talk to [@BotFather](https://t.me/BotFather), `/newbot`, get the token.
+2. Create a group and add the bot to it.
+3. Send `/start@your_bot` in the group, open `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   and find `chat.id` (negative for groups).
+4. Copy `config\render_notifier.example.ini` to `config\render_notifier.ini`, fill in `token` and `chat_id`.
+5. Check the bot without 3ds Max:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\test_send.ps1
 ```
 
-В чат должно прийти тестовое сообщение. Файл `config\render_notifier.ini` в git не попадает.
+`config\render_notifier.ini` is ignored by git, so the token never gets committed.
 
-## Установка на рабочую станцию
+### 2. Install on a workstation
 
-1. Скопировать папку проекта на компьютер (вместе с заполненным `config\render_notifier.ini`).
-2. Закрыть 3ds Max.
-3. Запустить установку:
+Close 3ds Max and double-click `Install.cmd`. It asks for administrator rights and copies the script
+and the config to `C:\Program Files\Autodesk\3ds Max <version>\scripts\startup` of every installed
+3ds Max. Start 3ds Max and render something.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install\install.ps1
-```
+`Uninstall.cmd` removes it. Per-user install without administrator rights:
+`install\install.ps1` (goes to `%LOCALAPPDATA%\Autodesk\3dsMax\<version>\ENU\scripts\startup`).
 
-4. Открыть 3ds Max.
-5. Запустить любой рендер — в чат придут два сообщения.
+### 3. Roll out to a studio
 
-Установщик кладёт `render_notifier.ms` и `render_notifier.ini` в `%LOCALAPPDATA%\Autodesk\3dsMax\<версия>\ENU\scripts\startup` для всех найденных версий Max. При повторной установке скрипт обновляется, а уже лежащий конфиг сохраняется (перезаписать: `-Force`).
+`tools\publish.ps1 -Target <shared folder>` copies everything needed for installation to a shared
+folder (Dropbox, a network share). On each machine: close 3ds Max, run `Install.cmd` from that folder.
 
-Вариант для всех пользователей машины — в `C:\Program Files\Autodesk\3ds Max <версия>\scripts\startup`. PowerShell нужно запустить от имени администратора:
+## Configuration
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install\install.ps1 -System
-```
+`render_notifier.ini` sits next to the script and is read before every render.
 
-Он же нужен, если Max не грузит скрипты из пользовательской папки (см. «Если сообщения не приходят»). Удаление — `uninstall.ps1 -System`. Другой конфиг вместо `config\render_notifier.ini` задаётся через `-ConfigPath`.
-
-Если в настройках Max папка Startup Scripts переназначена (Customize → Configure User and System Paths), файлы нужно положить туда вручную, оба рядом.
-
-Удаление:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install\uninstall.ps1
-```
-
-## Раскатка через общую папку
-
-`tools\publish.ps1` выкладывает всё нужное для установки в общую папку Dropbox (`...\Viarde_Install\Leshkin_scripts\RenderNotifier`, другой путь — параметром `-Target`): скрипт, конфиг команды, установщик и `Install.cmd` / `Uninstall.cmd`. На любом компьютере достаточно закрыть Max и дважды щёлкнуть `Install.cmd` — он сам запросит права администратора и поставит скрипт в Program Files.
-
-После правки скрипта или `config\render_notifier.ini` — снова запустить `publish.ps1`, затем `Install.cmd` на машинах.
-
-## Отключить на одной машине
-
-- **Временно, без удаления:** в `render_notifier.ini`, который лежит рядом со скриптом в папке `scripts\startup`, поставить `enabled=false`. Действует со следующего рендера, Max перезапускать не нужно. Файл в Program Files правится только от администратора.
-- **Совсем:** `uninstall.ps1 -System` от администратора (или без `-System`, если ставили в папку пользователя) и перезапустить Max.
-
-## Настройки
-
-Файл `render_notifier.ini` рядом со скриптом, кодировка UTF-8. Читается перед каждым рендером — перезапускать Max после правки не нужно.
-
-| Ключ | Что делает |
+| Key | Meaning |
 |---|---|
-| `token`, `chat_id`, `thread_id` | Бот, чат и (необязательно) тема |
-| `enabled` | `false` — выключить уведомления на этой машине |
-| `notify_start`, `notify_finish` | Какие сообщения слать |
-| `min_duration_sec` | Не сообщать о завершении рендера короче порога (тестовые рендеры) |
-| `display_name` | Как подписывать человека; пусто — имя пользователя Windows |
-| `timeout_ms` | Таймаут запроса к Telegram, по умолчанию 5000 |
-| `crash_watch` | `false` — не запускать сторож падений Max |
+| `token`, `chat_id`, `thread_id` | Bot, chat and, optionally, a forum topic |
+| `[computers]` section | `WINDOWS-NAME=label` for each machine, e.g. `RENDER-01=🟦 Farm 1` |
+| `enabled` | `false` switches notifications off on this machine |
+| `notify_start`, `notify_finish` | Which messages to send |
+| `min_duration_sec` | Skip the finish message for renders shorter than this |
+| `display_name` | Person's name shown next to the machine |
+| `timeout_ms` | Telegram request timeout, 5000 by default |
+| `crash_watch` | `false` disables the crash watchdog |
 
-### Имена компьютеров
+## Troubleshooting
 
-В секции `[computers]` можно задать, как показывать каждую машину. Слева имя компьютера в Windows, справа — что писать в сообщениях:
+The log is `%LOCALAPPDATA%\RenderNotifier\render_notifier.log`: script load, every render start and
+end, and Telegram's answer to every request. The token is masked.
 
-```
-[computers]
-RENDER-01=🟦 Ферма 1
-RENDER-02=🟧 Ферма 2
-PC-ANNA=🟪 Анна
-```
+No log at all means 3ds Max did not load the script. Look for
+`Hidden/System startup script ... skip loading` in `ENU\Network\Max.log`: since 2021.3, 3ds Max skips
+startup scripts in folders with the Hidden or System attribute. The installer warns about it.
 
-Файл один на всю студию: каждая машина берёт свою строку. Цвет текста в Telegram задать нельзя, поэтому машины различаются цветным значком в начале имени (🟥 🟧 🟨 🟩 🟦 🟪 🟫 ⬛). Имя компьютера в Windows показывает команда `hostname`.
+## Limitations
 
-## Если сообщения не приходят
+- A cancelled render looks the same as a finished one: 3ds Max reports the end of a render identically.
+- The watchdog cannot tell a crash from closing 3ds Max by hand in the middle of a render, and does
+  not notice a hung render or a power loss.
+- Network rendering through a queue manager (Backburner, Deadline) is not covered.
 
-Лог: `%LOCALAPPDATA%\RenderNotifier\render_notifier.log`. В нём видно, загрузился ли скрипт, каждый старт и конец рендера и ответ Telegram на каждую отправку. Токен в лог не пишется.
+## Development
 
-Если лога нет вообще — Max не загрузил скрипт. Поищите в `%LOCALAPPDATA%\Autodesk\3dsMax\<версия>\ENU\Network\Max.log` строку `Hidden/System startup script ... render_notifier.ms, skip loading`: Max (начиная с 2021.3) не грузит startup-скрипты из папок с атрибутом «скрытый» или «системный». Установщик в таком случае печатает предупреждение и команду `attrib`, которая это исправляет.
+- `src/render_notifier.ms` is the whole script. It must stay UTF-8 **with BOM** (Cyrillic and emoji).
+- `tests/run_tests.ps1 -Years 2024,2026` runs it in `3dsmaxbatch.exe` (PowerShell 7) against a local
+  HTTP listener instead of Telegram: message texts, encoding, Scene Manager queue, the watchdog
+  (3ds Max is killed mid-render), Corona DR nodes, an unreachable network.
+- `SPEC.md` is the original specification, `CLAUDE.md` holds the design notes.
 
-Скрипт не мешает рендеру: сообщение о старте уходит в фоне, любая ошибка только записывается в лог. Без интернета Max рендерит как обычно; после окончания рендера возможна пауза до `timeout_ms`, пока ждётся ответ.
+## License
 
-## Что пока не умеет
-
-- Отличать отменённый рендер от законченного: Max сообщает о конце рендера одинаково в обоих случаях. Сообщение «Рендер закончен» придёт и при отмене.
-- Отличать падение Max от закрытия вручную посреди рендера: в обоих случаях придёт «3ds Max закрылся во время рендера».
-- Замечать зависший рендер (Max жив, но не отвечает), выключение или перезагрузку компьютера, а также падение между двумя кадрами очереди.
-- Сетевой рендер (Backburner, Deadline, Pulze Render Manager): события происходят на рендер-ноде, а не у художника.
-- Узнавать о прерванной очереди: если пакет setup-ов остановили на середине, сообщения «Очередь завершена» не будет.
-
-## Разработка
-
-- `src/render_notifier.ms` — весь скрипт. Файл в UTF-8 **с BOM** (кириллица и эмодзи), BOM нельзя терять.
-- `tests/run_tests.ps1 -Years 2024,2026` — тест в `3dsmaxbatch.exe` (PowerShell 7): Telegram подменяется локальным HTTP-слушателем, проверяются тексты сообщений, кодировка, лог и поведение при недоступной сети.
-- `SPEC.md` — исходная спецификация.
+[MIT](LICENSE)

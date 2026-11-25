@@ -121,7 +121,7 @@ timeout_ms=5000
 Старт:
 ```
 🟡 Рендер запущен
-Сцена: KHU100-30_main.max
+Сцена: Kitchen_main.max
 Камера: Cam_Front
 Компьютер: RENDER-03 (Oleksiy)
 1 кадр, 4000×3000, V-Ray
@@ -130,7 +130,7 @@ timeout_ms=5000
 Финиш:
 ```
 🟢 Рендер закончен — 1 ч 42 мин
-Сцена: KHU100-30_main.max
+Сцена: Kitchen_main.max
 Компьютер: RENDER-03 (Oleksiy)
 ```
 
