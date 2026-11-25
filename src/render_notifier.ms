@@ -28,8 +28,12 @@
         minDurationSec = 0,
         displayName = "",
         timeoutMs = 5000,
+        crashWatch = true,
+        computerLabel = "",
 
         -- состояние
+        watchProc = undefined,
+        markerPath = "",
         client = undefined,
         clientTimeout = 0,
         active = false,
@@ -38,6 +42,11 @@
         frameCount = 0,
         sceneLine = "",
         machineLine = "",
+        setupLine = "",
+        queueIdx = 0,
+        queueTotal = 0,
+        lastSetupIdx = 0,
+        queueWatch = undefined,
 
         -------------------------------------------------------------- лог
 
@@ -90,26 +99,31 @@
             token = ""; chatId = ""; threadId = ""
             apiBase = "https://api.telegram.org"
             enabled = true; notifyStart = true; notifyFinish = true
-            minDurationSec = 0; displayName = ""; timeoutMs = 5000
+            minDurationSec = 0; displayName = ""; timeoutMs = 5000; crashWatch = true
+            computerLabel = ""
+            -- строка секции [computers] для этой машины: ИМЯ_КОМПЬЮТЕРА=как показывать
+            local myKey = "computers." + (toLower sysInfo.computername)
 
             if not (doesFileExist iniPath) then false
             else
             (
                 local lines = (dotNetClass "System.IO.File").ReadAllLines iniPath
+                -- строки режем регулярками .NET: substring/trim в MAXScript портят
+                -- значения с эмодзи (символы вне BMP)
+                local rx = dotNetClass "System.Text.RegularExpressions.Regex"
                 local section = ""
                 for ln in lines do
                 (
-                    local s = trimStr ln
-                    if s.count > 0 and s[1] != ";" and s[1] != "#" do
+                    local mSec = rx.Match ln "^\\s*\\[\\s*(.*?)\\s*\\]\\s*$"
+                    if mSec.Success then section = toLower mSec.Groups.Item[1].Value
+                    else
                     (
-                        if s[1] == "[" then section = toLower (trimStr (substituteString (substituteString s "[" "") "]" ""))
-                        else
+                        local mKv = rx.Match ln "^\\s*([^;#=\\s][^=]*?)\\s*=\\s*(.*?)\\s*$"
+                        if mKv.Success do
                         (
-                            local eq = findString s "="
-                            if eq != undefined do
                             (
-                                local k = section + "." + (toLower (trimStr (substring s 1 (eq - 1))))
-                                local v = trimStr (substring s (eq + 1) -1)
+                                local k = section + "." + (toLower mKv.Groups.Item[1].Value)
+                                local v = mKv.Groups.Item[2].Value
                                 case k of
                                 (
                                     "telegram.token": token = v
@@ -122,7 +136,8 @@
                                     "options.min_duration_sec": minDurationSec = asInt v 0
                                     "options.display_name": displayName = v
                                     "options.timeout_ms": timeoutMs = asInt v 5000
-                                    default: ()
+                                    "options.crash_watch": crashWatch = asBool v true
+                                    default: (if k == myKey do computerLabel = v)
                                 )
                             )
                         )
@@ -160,15 +175,88 @@
 
         -- Отправка не ждёт ответа: возвращает .NET Task, запрос идёт в пуле потоков.
         -- Из чужих потоков в MAXScript ничего не вызывается.
-        fn sendText txt =
+        fn apiUrl = apiBase + "/bot" + token + "/sendMessage",
+
+        fn buildBody txt =
         (
-            ensureClient()
             local uriClass = dotNetClass "System.Uri"
             local body = "chat_id=" + (uriClass.EscapeDataString chatId) + "&text=" + (uriClass.EscapeDataString txt)
             if threadId != "" do body += "&message_thread_id=" + (uriClass.EscapeDataString threadId)
-            local content = dotNetObject "System.Net.Http.StringContent" body (dotNetClass "System.Text.Encoding").UTF8 "application/x-www-form-urlencoded"
-            local uri = dotNetObject "System.Uri" (apiBase + "/bot" + token + "/sendMessage")
-            client.PostAsync uri content
+            body
+        ),
+
+        fn sendText txt =
+        (
+            ensureClient()
+            local content = dotNetObject "System.Net.Http.StringContent" (buildBody txt) (dotNetClass "System.Text.Encoding").UTF8 "application/x-www-form-urlencoded"
+            client.PostAsync (dotNetObject "System.Uri" (apiUrl())) content
+        ),
+
+        ----------------------------------------------- сторож падений Max
+
+        -- Пока идёт рендер, на диске лежит файл-метка с готовым запросом в Telegram.
+        -- Рядом с Max работает скрытый процесс PowerShell: он ждёт, пока Max закроется,
+        -- и если метка к этому моменту не убрана (рендер не закончился) - отправляет её.
+        -- Текст сторожа: только одинарные кавычки и без обратных слэшей.
+        fn watchdogScript =
+        (
+            "param([int]$MaxPid, [string]$Marker)
+try { Wait-Process -Id $MaxPid -ErrorAction Stop } catch {}
+Start-Sleep -Seconds 2
+if (-not (Test-Path -LiteralPath $Marker)) { exit 0 }
+$log = Join-Path (Split-Path $Marker -Parent) 'render_notifier.log'
+$stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+$lines = $null
+try {
+    $lines = [IO.File]::ReadAllLines($Marker)
+    $d = (Get-Date) - (Get-Item -LiteralPath $Marker).LastWriteTime
+    $dur = '{0}:{1:00}:{2:00}' -f [int][Math]::Floor($d.TotalHours), $d.Minutes, $d.Seconds
+    $body = $lines[1].Replace('RNDURATION', $dur)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    Invoke-RestMethod -Method Post -Uri $lines[0] -ContentType 'application/x-www-form-urlencoded; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 20 | Out-Null
+    [IO.File]::AppendAllText($log, $stamp + '  watchdog: 3ds Max ' + $MaxPid + ' exited during render, message sent' + [Environment]::NewLine)
+}
+catch {
+    $m = $_.Exception.Message
+    if ($lines) { $m = $m.Replace($lines[0], '<url>') }
+    [IO.File]::AppendAllText($log, $stamp + '  watchdog: 3ds Max ' + $MaxPid + ' exited during render, send failed: ' + $m + [Environment]::NewLine)
+}
+Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
+"
+        ),
+
+        fn clearMarker =
+        (
+            try (if markerPath != "" and (doesFileExist markerPath) do deleteFile markerPath) catch ()
+        ),
+
+        -- Записать метку и убедиться, что сторож этого Max запущен (один на сессию Max).
+        fn armWatchdog txt =
+        (
+            try
+            (
+                local dir = (systemTools.getEnvVariable "LOCALAPPDATA") + "\\RenderNotifier"
+                makeDir dir all:true
+                local maxPid = ((dotNetClass "System.Diagnostics.Process").GetCurrentProcess()).Id
+                markerPath = dir + "\\running_" + (maxPid as string) + ".txt"
+                local ioFile = dotNetClass "System.IO.File"
+                ioFile.WriteAllText markerPath (apiUrl() + "\r\n" + (buildBody txt) + "\r\n")
+
+                local alive = false
+                try (alive = watchProc != undefined and not watchProc.HasExited) catch ()
+                if not alive do
+                (
+                    local ps1 = dir + "\\render_watchdog.ps1"
+                    ioFile.WriteAllText ps1 (watchdogScript())
+                    local psi = dotNetObject "System.Diagnostics.ProcessStartInfo" "powershell.exe"
+                    psi.Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" + ps1 + "\" -MaxPid " + (maxPid as string) + " -Marker \"" + markerPath + "\""
+                    psi.UseShellExecute = false
+                    psi.CreateNoWindow = true
+                    watchProc = (dotNetClass "System.Diagnostics.Process").Start psi
+                    logMsg ("watchdog started for 3ds Max " + (maxPid as string))
+                )
+            )
+            catch (logMsg ("watchdog error: " + getCurrentException()))
         ),
 
         -- Дождаться задачи (не дольше waitMs) и записать результат в лог.
@@ -228,23 +316,6 @@
             else substituteString n "_" " "
         ),
 
-        fn viewLine =
-        (
-            local r = ""
-            try
-            (
-                local cam = viewport.getCamera()
-                if cam != undefined then r = "Камера: " + cam.name
-                else
-                (
-                    local t = viewport.getType()
-                    if t != undefined do r = "Вид: " + (substituteString (t as string) "view_" "")
-                )
-            )
-            catch ()
-            r
-        ),
-
         -- Число кадров по настройкам Render Setup.
         fn framesText =
         (
@@ -254,15 +325,97 @@
             (
                 2: (
                     local n = (((animationRange.end - animationRange.start).frame as integer) / nth) + 1
-                    (n as string) + " " + (pluralFrames n)
+                    (n as string) + " " + (pluralFrames n) + " анимации"
                 )
                 3: (
                     local n = ((((rendEnd - rendStart) as time).frame as integer) / nth) + 1
-                    (n as string) + " " + (pluralFrames n)
+                    (n as string) + " " + (pluralFrames n) + " анимации"
                 )
-                4: "кадры " + rendPickupFrames
-                default: "1 кадр"
+                4: "кадры анимации " + rendPickupFrames
+                default: ""
             )
+        ),
+
+        -- Pulze Scene Manager 2.x хранит свои setup-ы ("кадры") в сцене:
+        -- rootnode.SceneManager_Attributes.SceneManager_Dat, JSON в base64.
+        -- Какой setup рендерится сейчас, там не записано - определяем по имени файла
+        -- вывода (rendOutputFilename == finalPath setup-а), запасной вариант - камера + кадр.
+        -- Возвращает #(имя, номер среди отмеченных на рендер, всего отмечено, способ) или undefined.
+        fn sceneManagerInfo =
+        (
+            local res = undefined
+            try
+            (
+                if isProperty rootnode #SceneManager_Attributes do
+                (
+                    local dat = rootnode.SceneManager_Attributes.SceneManager_Dat
+                    if dat != undefined and dat != "" do
+                    (
+                        local js = (dotNetClass "System.Text.Encoding").UTF8.GetString ((dotNetClass "System.Convert").FromBase64String dat)
+                        local rx = dotNetClass "System.Text.RegularExpressions.Regex"
+                        local str = "\"((?:[^\"\\\\]|\\\\.)*)\""
+                        local outName = toLower (getFilenameFile (substituteString rendOutputFilename "/" "\\"))
+                        local camName = ""
+                        try (local cam = viewport.getCamera(); if cam != undefined do camName = cam.name) catch ()
+                        local frame = (currentTime.frame as integer) as string
+                        local names = #(), queued = #(), byOutput = 0, byCamera = #()
+
+                        for c in (rx.Split js "(?=\\{\"version\":\\d+,\"id\":\")") do
+                        (
+                            local mName = rx.Match c ("\"scenename\":\\{\"text\":" + str)
+                            if mName.Success do
+                            (
+                                append names (rx.Unescape mName.Groups.Item[1].Value)
+                                append queued (rx.IsMatch c "\"render\":\\{\"enabled\":true\\}")
+                                local i = names.count
+
+                                local mOut = rx.Match c ("\"output_Common\":\\{\"enabled\":true,\"projectPath\":(?:null|" + str + "),\"finalPath\":" + str)
+                                if byOutput == 0 and outName != "" and mOut.Success do
+                                (
+                                    local f = substituteString (rx.Unescape mOut.Groups.Item[2].Value) "/" "\\"
+                                    if (toLower (getFilenameFile f)) == outName do byOutput = i
+                                )
+
+                                local mCam = rx.Match c ("\"camera\":\\{\"enabled\":true,\"name\":" + str)
+                                local mFrame = rx.Match c "\"frames\":\\{\"enabled\":true,\"type\":0,\"single\":\"(-?\\d+)\""
+                                if camName != "" and mCam.Success and (rx.Unescape mCam.Groups.Item[1].Value) == camName do
+                                    if (not mFrame.Success) or mFrame.Groups.Item[1].Value == frame do append byCamera i
+                            )
+                        )
+
+                        local pick = byOutput
+                        local how = "output"
+                        if pick == 0 and byCamera.count > 0 do
+                        (
+                            how = "camera"
+                            local cands = for i in byCamera where queued[i] collect i
+                            if cands.count == 0 do cands = byCamera
+                            pick = cands[1]
+                            -- несколько setup-ов с одной камерой: берём следующий после прошлого
+                            for i = cands.count to 1 by -1 where cands[i] > lastSetupIdx do pick = cands[i]
+                        )
+                        if pick > 0 do
+                        (
+                            lastSetupIdx = pick
+                            local total = 0
+                            local idx = 0
+                            for i = 1 to names.count where queued[i] do
+                            (
+                                total += 1
+                                if i == pick do idx = total
+                            )
+                            res = #(names[pick], idx, total, how)
+                        )
+                    )
+                )
+            )
+            catch (logMsg ("Scene Manager data error: " + getCurrentException()))
+            res
+        ),
+
+        fn queueSuffix =
+        (
+            if queueIdx > 0 and queueTotal > 1 then " — кадр " + (queueIdx as string) + " из " + (queueTotal as string) else ""
         ),
 
         -------------------------------------------------------- callbacks
@@ -293,23 +446,57 @@
                         h = p[26].y as integer
                     )
 
-                    local who = if displayName != "" then displayName else sysInfo.username
-                    machineLine = "Компьютер: " + sysInfo.computername + " (" + who + ")"
+                    -- своё имя машины из [computers] показываем без имени пользователя Windows
+                    if computerLabel != "" then
+                        machineLine = "Компьютер: " + computerLabel + (if displayName != "" then " (" + displayName + ")" else "")
+                    else
+                    (
+                        local who = if displayName != "" then displayName else sysInfo.username
+                        machineLine = "Компьютер: " + sysInfo.computername + " (" + who + ")"
+                    )
                     sceneLine = "Сцена: " + (if maxFileName != "" then maxFileName else "без имени")
 
                     watch = dotNetObject "System.Diagnostics.Stopwatch"
                     watch.Start()
                     active = true
 
-                    logMsg ("render start: " + maxFileName + ", type=" + ((if (isKindOf p Array) and p.count >= 2 then p[1] else "?") as string) + ", net=" + ((if (isKindOf p Array) and p.count >= 2 then p[2] else "?") as string))
+                    local prevIdx = queueIdx
+                    setupLine = ""
+                    queueIdx = 0
+                    queueTotal = 0
+                    local sm = sceneManagerInfo()
+                    if sm != undefined do
+                    (
+                        setupLine = "Кадр: " + sm[1]
+                        queueIdx = sm[2]
+                        queueTotal = sm[3]
+                    )
+                    -- время очереди считаем, только если она идёт подряд с первого кадра
+                    if queueIdx == 1 then
+                    (
+                        queueWatch = dotNetObject "System.Diagnostics.Stopwatch"
+                        queueWatch.Start()
+                    )
+                    else if queueIdx != prevIdx + 1 do queueWatch = undefined
+
+                    logMsg ("render start: " + maxFileName + ", type=" + ((if (isKindOf p Array) and p.count >= 2 then p[1] else "?") as string) + ", net=" + ((if (isKindOf p Array) and p.count >= 2 then p[2] else "?") as string) + ", out=" + (rendOutputFilename as string) + ", setup=" + (sm as string))
+
+                    if crashWatch do
+                    (
+                        local crashTxt = "🔴 3ds Max закрылся во время рендера" + queueSuffix() + "\n" + sceneLine + "\n"
+                        if setupLine != "" do crashTxt += setupLine + "\n"
+                        crashTxt += machineLine + "\nРендер шёл RNDURATION (ч:мм:сс)"
+                        armWatchdog crashTxt
+                    )
 
                     if notifyStart do
                     (
-                        local txt = "🟡 Рендер запущен\n" + sceneLine + "\n"
-                        local v = viewLine()
-                        if v != "" do txt += v + "\n"
+                        local txt = "🟡 Рендер запущен" + queueSuffix() + "\n" + sceneLine + "\n"
+                        if setupLine != "" do txt += setupLine + "\n"
                         txt += machineLine + "\n"
-                        txt += framesText() + ", " + (w as string) + "×" + (h as string) + ", " + rendererName()
+                        local ft = framesText()
+                        if ft != "" do txt += ft + ", "
+                        txt += (w as string) + "×" + (h as string) + ", " + rendererName()
                         startTask = sendText txt
                     )
                 )
@@ -326,6 +513,8 @@
         (
             try
             (
+                -- рендер закончился штатно: сторожу сообщать не о чем
+                clearMarker()
                 if active do
                 (
                     active = false
@@ -337,9 +526,24 @@
 
                     if notifyFinish and sec >= minDurationSec do
                     (
-                        local txt = "🟢 Рендер закончен — " + (formatDuration sec) + "\n" + sceneLine + "\n" + machineLine
-                        if frameCount > 1 do txt += "\nКадров: " + (frameCount as string)
+                        local txt = "🟢 Рендер закончен — " + (formatDuration sec) + queueSuffix() + "\n" + sceneLine + "\n"
+                        if setupLine != "" do txt += setupLine + "\n"
+                        txt += machineLine
+                        if frameCount > 1 do txt += "\nКадров анимации: " + (frameCount as string)
                         finishTask (sendText txt) "finish" timeoutMs
+                    )
+
+                    -- дорендерился последний из отмеченных на рендер setup-ов Scene Manager
+                    if queueTotal > 1 and queueIdx == queueTotal do
+                    (
+                        if notifyFinish do
+                        (
+                            local txt = "🏁 Очередь завершена — " + (queueTotal as string) + " " + (pluralFrames queueTotal)
+                            if queueWatch != undefined do txt += " за " + (formatDuration queueWatch.Elapsed.TotalSeconds)
+                            txt += "\n" + sceneLine + "\n" + machineLine
+                            finishTask (sendText txt) "queue" timeoutMs
+                        )
+                        queueWatch = undefined
                     )
                 )
             )
