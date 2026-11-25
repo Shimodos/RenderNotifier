@@ -35,8 +35,11 @@ foreach ($year in $Years) {
     [IO.File]::WriteAllText("$out\crash.ini", ($ini -f "http://localhost:$Port") + "notify_start=false`n", $utf8)
 
     # Scene Manager 2.x setups, same field order as in a real scene
-    $setup = '{{"version":7,"id":"{0}","color":"#fff","render":{{"enabled":{1}}},"scenename":{{"text":"{2}"}},"camera":{{"enabled":true,"name":"Cam{0}","handle":1,"locked":false,"props":[]}},"frames":{{"enabled":true,"type":0,"single":"0","start":0,"end":100,"nth":1,"list":""}},"output_Common":{{"enabled":true,"projectPath":"C:/rn_test/","finalPath":"C:/rn_test/{2}.exr","exist":false,"preset":[]}},"status":"#WIP"}}'
-    $sm = '[' + (($setup -f 'a', 'false', 'SetupA'), ($setup -f 'b', 'true', 'SetupB'), ($setup -f 'c', 'true', 'SetupC') -join ',') + ']'
+    $setup = '{{"version":7,"id":"{0}","color":"#fff","render":{{"enabled":{1}}},"scenename":{{"text":"{2}"}},"camera":{{"enabled":true,"name":"Cam{0}","handle":1,"locked":false,"props":[]}},"frames":{{"enabled":true,"type":0,"single":"0","start":0,"end":100,"nth":1,"list":""}},"output_Common":{{"enabled":true,"projectPath":"C:/rn_test/","finalPath":"C:/rn_test/{3}.exr","exist":false,"preset":[]}},"status":"#WIP"}}'
+    # As seen in a real scene: an unqueued copy of SetupB earlier in the list,
+    # and a stale finalPath in SetupC that still points to SetupB's file.
+    $sm = '[' + (($setup -f 'z', 'false', 'SetupB', 'SetupB'), ($setup -f 'a', 'false', 'SetupA', 'SetupA'),
+        ($setup -f 'b', 'true', 'SetupB', 'SetupB'), ($setup -f 'c', 'true', 'SetupC', 'SetupB') -join ',') + ']'
     [IO.File]::WriteAllText("$out\sm.json", $sm, $utf8)
 
     $reqFile = "$out\requests.jsonl"

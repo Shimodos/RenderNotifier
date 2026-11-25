@@ -358,7 +358,7 @@ Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
                         local camName = ""
                         try (local cam = viewport.getCamera(); if cam != undefined do camName = cam.name) catch ()
                         local frame = (currentTime.frame as integer) as string
-                        local names = #(), queued = #(), byOutput = 0, byCamera = #()
+                        local names = #(), queued = #(), byName = #(), byPath = #(), byCamera = #()
 
                         for c in (rx.Split js "(?=\\{\"version\":\\d+,\"id\":\")") do
                         (
@@ -369,11 +369,14 @@ Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
                                 append queued (rx.IsMatch c "\"render\":\\{\"enabled\":true\\}")
                                 local i = names.count
 
+                                -- имя файла вывода обычно равно имени setup-а; сохранённый finalPath
+                                -- бывает устаревшим, поэтому он только запасной признак
+                                if outName != "" and (toLower names[i]) == outName do append byName i
                                 local mOut = rx.Match c ("\"output_Common\":\\{\"enabled\":true,\"projectPath\":(?:null|" + str + "),\"finalPath\":" + str)
-                                if byOutput == 0 and outName != "" and mOut.Success do
+                                if outName != "" and mOut.Success do
                                 (
                                     local f = substituteString (rx.Unescape mOut.Groups.Item[2].Value) "/" "\\"
-                                    if (toLower (getFilenameFile f)) == outName do byOutput = i
+                                    if (toLower (getFilenameFile f)) == outName do append byPath i
                                 )
 
                                 local mCam = rx.Match c ("\"camera\":\\{\"enabled\":true,\"name\":" + str)
@@ -383,15 +386,18 @@ Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
                             )
                         )
 
-                        local pick = byOutput
-                        local how = "output"
-                        if pick == 0 and byCamera.count > 0 do
+                        local pick = 0
+                        local how = "name"
+                        local cands = byName
+                        if cands.count == 0 do (cands = byPath; how = "output")
+                        if cands.count == 0 do (cands = byCamera; how = "camera")
+                        if cands.count > 0 do
                         (
-                            how = "camera"
-                            local cands = for i in byCamera where queued[i] collect i
-                            if cands.count == 0 do cands = byCamera
+                            -- в списке бывают копии setup-а с тем же именем: берём отмеченную на рендер
+                            local q = for i in cands where queued[i] collect i
+                            if q.count > 0 do cands = q
                             pick = cands[1]
-                            -- несколько setup-ов с одной камерой: берём следующий после прошлого
+                            -- всё ещё несколько: берём следующий после прошлого
                             for i = cands.count to 1 by -1 where cands[i] > lastSetupIdx do pick = cands[i]
                         )
                         if pick > 0 do

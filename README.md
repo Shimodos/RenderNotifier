@@ -80,6 +80,17 @@ powershell -ExecutionPolicy Bypass -File install\install.ps1 -System
 powershell -ExecutionPolicy Bypass -File install\uninstall.ps1
 ```
 
+## Раскатка через общую папку
+
+`tools\publish.ps1` выкладывает всё нужное для установки в общую папку Dropbox (`...\Viarde_Install\Leshkin_scripts\RenderNotifier`, другой путь — параметром `-Target`): скрипт, конфиг команды, установщик и `Install.cmd` / `Uninstall.cmd`. На любом компьютере достаточно закрыть Max и дважды щёлкнуть `Install.cmd` — он сам запросит права администратора и поставит скрипт в Program Files.
+
+После правки скрипта или `config\render_notifier.ini` — снова запустить `publish.ps1`, затем `Install.cmd` на машинах.
+
+## Отключить на одной машине
+
+- **Временно, без удаления:** в `render_notifier.ini`, который лежит рядом со скриптом в папке `scripts\startup`, поставить `enabled=false`. Действует со следующего рендера, Max перезапускать не нужно. Файл в Program Files правится только от администратора.
+- **Совсем:** `uninstall.ps1 -System` от администратора (или без `-System`, если ставили в папку пользователя) и перезапустить Max.
+
 ## Настройки
 
 Файл `render_notifier.ini` рядом со скриптом, кодировка UTF-8. Читается перед каждым рендером — перезапускать Max после правки не нужно.
